@@ -5,7 +5,6 @@ import (
 	"html/template"
 	"log"
 	"sync"
-	"text/template/parse"
 )
 
 type Message struct {
@@ -13,14 +12,18 @@ type Message struct {
 	Text     string `json:"text"`
 }
 
-type Hub struct {
-	clients map[*Client]bool
+type WSMessage struct {
+	Text   string      `json:"text"`
+	Header interface{} `json:"header"`
+}
 
+type Hub struct {
+	sync.RWMutex
+	clients    map[*Client]bool
 	broadcast  chan *Message
 	register   chan *Client
 	unregister chan *Client
-
-	message []*Message
+	messages   []*Message
 }
 
 func NewHub() *Hub {
@@ -34,20 +37,48 @@ func NewHub() *Hub {
 
 func (h *Hub) run() {
 	for {
+		select {
+		case client := <-h.register:
+			h.Lock()
+			h.clients[client] = true
+			h.Unlock()
+			log.Printf("client registered %s", client.id)
+			for _, msg := range h.messages {
+				client.send <- getMessageTemplate(msg)
+			}
+		case client := <-h.unregister:
+			h.Lock()
+			if _, ok := h.clients[client]; ok {
+				close(client.send)
+				log.Printf("client unregistered %s", client.id)
+				delete(h.clients, client)
+			}
+			h.Unlock()
+		case msg := <-h.broadcast:
+			h.RLock()
+			h.messages = append(h.messages, msg)
+			for client := range h.clients {
+				select {
+				case client.send <- getMessageTemplate(msg):
+				default:
+					close(client.send)
+					delete(h.clients, client)
+				}
+			}
+			h.RUnlock()
+		}
 	}
 }
 
 func getMessageTemplate(msg *Message) []byte {
-	tmpl, err := template.ParseFiles("templates/index.html")
+	tmpl, err := template.ParseFiles("templates/message.html")
 	if err != nil {
-		log.Fatal("error while parsing templates", err)
+		log.Fatalf("template parsing: %s", err)
 	}
-	var renderdMessage bytes.Buffer
-	err = tmpl.Execute(&renderdMessage, msg)
-
+	var renderedMessage bytes.Buffer
+	err = tmpl.Execute(&renderedMessage, msg)
 	if err != nil {
-		log.Fatal("temlate execution:", err)
+		log.Fatalf("template execution: %s", err)
 	}
-
-	return renderdMessage.Bytes()
+	return renderedMessage.Bytes()
 }
