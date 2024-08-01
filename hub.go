@@ -8,8 +8,8 @@ import (
 )
 
 type Message struct {
-	ClientID string `json:"clientID"`
 	Text     string `json:"text"`
+	ClientID string `json:"clientID"`
 }
 
 type WSMessage struct {
